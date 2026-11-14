@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Book an appointment</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.6rem; }
+    fieldset { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.25rem; padding: 1rem; }
+    legend { font-weight: 600; padding: 0 .4rem; }
+    label { display: block; margin: .5rem 0 .2rem; font-size: .9rem; }
+    input, select { width: 100%; box-sizing: border-box; padding: .5rem; font-size: 1rem; border: 1px solid #bbb; border-radius: 6px; }
+    button { margin-top: .75rem; padding: .55rem 1rem; font-size: 1rem; border: 0; border-radius: 6px; background: #1f6feb; color: #fff; cursor: pointer; }
+    button:disabled { background: #9bb8e0; cursor: default; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: .6rem 0; border-bottom: 1px solid #eee; }
+    li.unavailable { color: #888; }
+    .msg { margin-top: .75rem; padding: .6rem .8rem; border-radius: 6px; }
+    .error { background: #fde8e8; color: #8a1c1c; }
+    .ok { background: #e6f6ea; color: #17602a; }
+    .muted { color: #666; font-size: .9rem; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; }
+    dt { color: #666; }
+    dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Book an appointment</h1>
+
+  <fieldset>
+    <legend>API key</legend>
+    <label for="apiKey">Enter the API key (kept in this browser tab only)</label>
+    <input id="apiKey" type="password" autocomplete="off">
+    <button id="loadBtn" type="button">Load available slots</button>
+    <div id="loadMsg"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>1. Choose a slot</legend>
+    <ul id="slots"><li class="muted">Enter the API key and load slots.</li></ul>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. Your details</legend>
+    <form id="bookForm">
+      <label for="slotId">Selected slot</label>
+      <select id="slotId" required></select>
+      <label for="name">Full name</label>
+      <input id="name" required maxlength="200" autocomplete="name">
+      <label for="email">Email</label>
+      <input id="email" type="email" required maxlength="200" autocomplete="email">
+      <button id="bookBtn" type="submit" disabled>Book slot</button>
+    </form>
+    <div id="bookMsg"></div>
+  </fieldset>
+
+  <fieldset id="confirmation" hidden>
+    <legend>Confirmation</legend>
+    <dl id="confirmDetails"></dl>
+  </fieldset>
+
+  <fieldset>
+    <legend>Look up a booking</legend>
+    <label for="lookupId">Booking ID</label>
+    <input id="lookupId">
+    <button id="lookupBtn" type="button">Look up</button>
+    <div id="lookupMsg"></div>
+  </fieldset>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const keyInput = $('apiKey');
+  keyInput.value = sessionStorage.getItem('apiKey') || '';
+  keyInput.addEventListener('change', () => sessionStorage.setItem('apiKey', keyInput.value));
+
+  function showMsg(el, text, kind) {
+    el.innerHTML = '';
+    if (!text) return;
+    const d = document.createElement('div');
+    d.className = 'msg ' + kind;
+    d.textContent = text;
+    el.appendChild(d);
+  }
+
+  async function api(method, path, body, extraHeaders = {}) {
+    const headers = { 'X-API-Key': keyInput.value, ...extraHeaders };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    return { status: res.status, data, retryAfter: res.headers.get('Retry-After') };
+  }
+
+  function errorText(r, fallback) {
+    if (r.status === 429) return `Too many attempts. Please wait ${r.retryAfter || 'a few'} seconds and try again.`;
+    return r.data.error || fallback;
+  }
+
+  const fmt = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+  async function loadSlots() {
+    showMsg($('loadMsg'), '', '');
+    const r = await api('GET', '/slots');
+    if (r.status !== 200) return showMsg($('loadMsg'), errorText(r, 'Could not load slots'), 'error');
+    const list = $('slots');
+    const select = $('slotId');
+    list.innerHTML = '';
+    select.innerHTML = '';
+    const open = r.data.slots.filter((s) => s.available && new Date(s.start) > new Date());
+    if (open.length === 0) list.innerHTML = '<li class="muted">No slots are available.</li>';
+    for (const s of r.data.slots) {
+      const li = document.createElement('li');
+      if (!s.available) li.className = 'unavailable';
+      const label = document.createElement('span');
+      label.textContent = `${fmt(s.start)} with ${s.provider}${s.available ? '' : ' (booked)'}`;
+      li.appendChild(label);
+      if (s.available) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Select';
+        btn.style.marginTop = '0';
+        btn.addEventListener('click', () => { select.value = s.id; updateBookBtn(); $('name').focus(); });
+        li.appendChild(btn);
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${fmt(s.start)} with ${s.provider}`;
+        select.appendChild(opt);
+      }
+      list.appendChild(li);
+    }
+    updateBookBtn();
+    showMsg($('loadMsg'), `Loaded ${r.data.slots.length} slot(s).`, 'ok');
+  }
+
+  function updateBookBtn() {
+    $('bookBtn').disabled = !($('slotId').options.length > 0 && keyInput.value);
+  }
+
+  function showConfirmation(b, slotLabel) {
+    const dl = $('confirmDetails');
+    dl.innerHTML = '';
+    const rows = [
+      ['Booking ID', b.id],
+      ['Status', b.status],
+      ['Slot', slotLabel || b.slot_id],
+      ['Name', b.name],
+      ['Email', b.email],
+      ['Booked at', fmt(b.created_at)],
+    ];
+    for (const [k, v] of rows) {
+      const dt = document.createElement('dt'); dt.textContent = k;
+      const dd = document.createElement('dd'); dd.textContent = v;
+      dl.append(dt, dd);
+    }
+    $('confirmation').hidden = false;
+  }
+
+  $('loadBtn').addEventListener('click', () => {
+    sessionStorage.setItem('apiKey', keyInput.value);
+    loadSlots().catch(() => showMsg($('loadMsg'), 'Network error loading slots.', 'error'));
+  });
+  keyInput.addEventListener('input', updateBookBtn);
+
+  $('bookForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('bookBtn');
+    btn.disabled = true;
+    showMsg($('bookMsg'), 'Booking…', 'ok');
+    // One key per submission. A double-click or network retry with this same key will not create a second booking.
+    const idemKey = crypto.randomUUID();
+    const slotLabel = $('slotId').options[$('slotId').selectedIndex].textContent;
+    try {
+      const r = await api('POST', '/bookings', {
+        slot_id: $('slotId').value,
+        name: $('name').value,
+        email: $('email').value,
+      }, { 'Idempotency-Key': idemKey });
+      if (r.status === 201) {
+        showMsg($('bookMsg'), 'Your appointment is booked.', 'ok');
+        showConfirmation(r.data, slotLabel);
+        $('bookForm').reset();
+        await loadSlots();
+      } else {
+        showMsg($('bookMsg'), errorText(r, 'Booking failed'), 'error');
+      }
+    } catch {
+      showMsg($('bookMsg'), 'Network error. Please try again.', 'error');
+    } finally {
+      updateBookBtn();
+    }
+  });
+
+  $('lookupBtn').addEventListener('click', async () => {
+    const id = $('lookupId').value.trim();
+    if (!id) return showMsg($('lookupMsg'), 'Enter a booking ID.', 'error');
+    const r = await api('GET', `/bookings/${encodeURIComponent(id)}`);
+    if (r.status === 200) {
+showMsg($('lookupMsg'), '', '');
+      showConfirmation(r.data);
+    } else {
+      showMsg($('lookupMsg'), errorText(r, 'Booking not found'), 'error');
+    }
+  });
+})();
+</script>
+</body>
+</html>
