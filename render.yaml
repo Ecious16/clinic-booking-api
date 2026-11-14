@@ -5,7 +5,7 @@ services:
     plan: free
     buildCommand: npm ci
     startCommand: npm start
-    healthCheckPath: /slots
+    healthCheckPath: /
     envVars:
       - key: DATABASE_URL
         sync: false   # Neon connection string (postgres://...?sslmode=require)
