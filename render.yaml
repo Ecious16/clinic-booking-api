@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: clinic-booking-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /slots
+    envVars:
+      - key: DATABASE_URL
+        sync: false   # Neon connection string (postgres://...?sslmode=require)
+      - key: DATABASE_SSL
+        value: "true"
+      - key: API_KEY
+        sync: false   # your chosen key; the checker sends it as X-API-Key
